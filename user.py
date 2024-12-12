@@ -5,6 +5,10 @@ import pyaudio  # 用于音频录制和播放
 from dotenv import load_dotenv  # 环境变量加载
 import msvcrt  # Windows控制台输入
 import time
+import select
+import sys
+import tempfile
+import uuid
 
 # 加载环境变量
 load_dotenv()
@@ -87,49 +91,74 @@ def record_and_stream_audio(client):
     # 发送结束标记
     client.publish("voice/stream", b"END_OF_STREAM")
 
+def wait_for_keypress():
+    """跨平台的按键检测"""
+    if os.name == 'nt':  # Windows
+        return msvcrt.getch()
+    else:  # Unix-like
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(sys.stdin.fileno())
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch.encode()
+
 def on_message(client, userdata, msg):
     """处理接收到的MQTT消息的回调函数"""
-    print(f"收到消息，主题: {msg.topic}")
-    print(f"消息大小: {len(msg.payload)} 字节")
-    
     if msg.topic == "voice/response":
+        temp_file = None
         try:
-            print("开始处理接收到的音频数据...")
-            # 保存接收到的音频数据为临时WAV文件
-            temp_wav = 'received_response.wav'
-            with open(temp_wav, 'wb') as f:
-                f.write(msg.payload)
-            print(f"音频数据已保存到临时文件: {temp_wav}")
+            # 创建临时文件
+            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            temp_file.write(msg.payload)
+            temp_file.flush()
             
-            # 播放音频响应
-            print("开始播放音频...")
-            wf = wave.open(temp_wav, 'rb')
+            # 播放音频
+            wf = wave.open(temp_file.name, 'rb')
             p = pyaudio.PyAudio()
             stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                            channels=wf.getnchannels(),
-                            rate=wf.getframerate(),
-                            output=True)
+                          channels=wf.getnchannels(),
+                          rate=wf.getframerate(),
+                          output=True)
             
-            # 分块读取并播放音频
             data = wf.readframes(1024)
             while data:
                 stream.write(data)
                 data = wf.readframes(1024)
             
-            # 清理资源
             stream.stop_stream()
             stream.close()
             p.terminate()
             wf.close()
             
-            # 删除临时文件
-            os.remove(temp_wav)
-            print("音频播放完成，临时文件已删除")
         except Exception as e:
             print(f"播放音频时出错: {str(e)}")
-            print(f"错误类型: {type(e)}")
-            import traceback
-            print(traceback.format_exc())
+        finally:
+            # 确保清理临时文件
+            if temp_file:
+                try:
+                    os.unlink(temp_file.name)
+                except Exception as e:
+                    print(f"删除临时文件失败: {e}")
+
+def connect_mqtt(client, broker, port, max_retries=3):
+    """带重试机制的MQTT连接"""
+    for attempt in range(max_retries):
+        try:
+            client.connect(broker, port)
+            print("MQTT连接已建立")
+            return True
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"连接失败 ({attempt + 1}/{max_retries}): {str(e)}")
+                time.sleep(1)
+            else:
+                print(f"MQTT连接失败: {str(e)}")
+                return False
 
 if __name__ == "__main__":
     # 创建MQTT客户端实例
@@ -145,11 +174,9 @@ if __name__ == "__main__":
     mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
     
     print(f"正在连接到MQTT服务器 {mqtt_broker}:{mqtt_port}")
-    try:
-        client.connect(mqtt_broker, mqtt_port)
-        print("MQTT连接已建立")
-    except Exception as e:
-        print(f"MQTT连接失败: {str(e)}")
+    if not connect_mqtt(client, mqtt_broker, mqtt_port):
+        print("无法连接到MQTT服务器，程序退出")
+        sys.exit(1)
     
     # 启动MQTT客户端循环
     client.loop_start()

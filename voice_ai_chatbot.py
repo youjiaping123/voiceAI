@@ -21,11 +21,6 @@ class VoiceAIChatbot:
         )
         self.speech_config.speech_recognition_language = "zh-CN"  # 设置语音识别语言为中文
         
-        # 初始化本地语音合成引擎
-        self.engine = pyttsx3.init()
-        self.engine.setProperty('rate', 200)    # 设置语速
-        self.engine.setProperty('volume', 1.0)  # 设置音量
-        
         # 初始化OpenAI客户端
         self.ai_client = OpenAI(
             api_key=os.getenv("API_KEY"),
@@ -72,7 +67,6 @@ class VoiceAIChatbot:
                     if evt.result.text.strip():  # 确保识别结果不为空
                         # 获取AI回复并转换为语音
                         ai_response = self.get_ai_response(evt.result.text)
-                        print(f"AI回复: {ai_response}")
                         self.text_to_speech(ai_response)
                 # 处理识别错误
                 elif evt.result.reason == speechsdk.ResultReason.NoMatch:
@@ -130,41 +124,43 @@ class VoiceAIChatbot:
 
     def get_ai_response(self, message):
         """获取AI的回复"""
-        try:
-            # 使用流式响应调用AI API
-            response_stream = self.ai_client.chat.completions.create(
-                model="claude-3-5-haiku-20241022",
-                messages=[
-                    {"role": "system", "content": "你是一个简洁友好的AI助手，回答要简短精确。"},
-                    {"role": "user", "content": message}
-                ],
-                stream=True  # 启用流式响应
-            )
-            
-            # 收集完整响应
-            full_response = ""
-            print("AI正在回复: ", end="", flush=True)
-            
-            for chunk in response_stream:
-                if chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_response += content
-                    print(content, end="", flush=True)
-            
-            print()
-            return full_response
-            
-        except Exception as e:
-            print(f"调用 AI API 出错: {str(e)}")
-            return "抱歉，我现在无法回答。"
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # 使用流式响应调用AI API
+                response_stream = self.ai_client.chat.completions.create(
+                    model="claude-3-5-haiku-20241022",
+                    messages=[
+                        {"role": "system", "content": "你是一个简洁友好的AI助手，回答要简短精确。"},
+                        {"role": "user", "content": message}
+                    ],
+                    stream=True  # 启用流式响应
+                )
+                
+                # 收集完整响应
+                full_response = ""
+                print("AI正在回复: ", end="", flush=True)
+                
+                for chunk in response_stream:
+                    if chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        full_response += content
+                        print(content, end="", flush=True)
+                
+                print()
+                return full_response
+                
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"重试AI调用 ({attempt + 1}/{max_retries})")
+                time.sleep(1)
 
     def text_to_speech(self, text):
         """将文本转换为语音并通过MQTT发送"""
         synthesizer = None
         try:
             print("正在生成语音回复...")
-            
-            # 配置语音合成服务
             speech_config = speechsdk.SpeechConfig(
                 subscription=os.getenv('SPEECH_KEY'), 
                 region=os.getenv('SPEECH_REGION')
@@ -180,11 +176,10 @@ class VoiceAIChatbot:
             audio_stream = io.BytesIO()
             
             def audio_callback(evt):
-                """音频数据回调函数"""
                 if evt.result.reason == speechsdk.ResultReason.SynthesizingAudio:
                     audio_stream.write(evt.result.audio_data)
             
-            # 创建语音合成器并注册回调
+            # 创建语音合成器
             synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
             synthesizer.synthesizing.connect(audio_callback)
             
@@ -192,11 +187,10 @@ class VoiceAIChatbot:
             result = synthesizer.speak_text_async(text).get()
             
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                # 获取合成的音频数据
                 audio_data = audio_stream.getvalue()
                 print(f"音频合成完成，数据大小: {len(audio_data)} 字节")
                 
-                # 通过MQTT发送音频数据
+                # 发送音频数据
                 result = self.mqtt_client.publish("voice/response", audio_data)
                 if result.rc == mqtt.MQTT_ERR_SUCCESS:
                     print("语音回复已发送")
@@ -207,14 +201,10 @@ class VoiceAIChatbot:
                 
         except Exception as e:
             print(f"语音合成错误: {str(e)}")
-            import traceback
-            print(traceback.format_exc())
-        
         finally:
-            # 清理资源
             if synthesizer:
-                synthesizer = None
-    
+                synthesizer.close()
+
     def start(self):
         """启动聊天机器人服务"""
         # 连接到MQTT服务器
@@ -225,6 +215,22 @@ class VoiceAIChatbot:
         self.mqtt_client.connect(mqtt_broker, mqtt_port)
         self.mqtt_client.loop_forever()  # 开始MQTT事件循环
 
+    def stop(self):
+        """优雅地停止服务"""
+        try:
+            self.stop_stream_recognition()
+            self.mqtt_client.disconnect()
+            print("服务已停止")
+        except Exception as e:
+            print(f"停止服务时出错: {str(e)}")
+
 if __name__ == "__main__":
     chatbot = VoiceAIChatbot()
-    chatbot.start() 
+    try:
+        chatbot.start()
+    except KeyboardInterrupt:
+        print("\n正在停止服务...")
+        chatbot.stop()
+    except Exception as e:
+        print(f"服务出错: {str(e)}")
+        chatbot.stop() 
