@@ -88,23 +88,30 @@ class VoiceAIChatbot:
                     
                     print(f"当前缓冲区({len(text_buffer)}字): {text_buffer}")
                     
-                    # 更智能的分段逻辑
+                    # 智能分段逻辑
                     should_synthesize = False
                     
-                    # 1. 达到最小长度且遇到自然停顿
-                    if len(text_buffer) >= 50 and any(p in text_buffer[-1] for p in '。！？.!?'):
+                    # 主要分段条件：完整的句子且达到最小长度
+                    if len(text_buffer) >= 50 and any(p in text_buffer[-1] for p in '。！？'):
                         should_synthesize = True
-                        print("触发合成：达到理想长度且遇到句号")
+                        print("触发合成：完整句子")
                     
-                    # 2. 达到最大长度
+                    # 次要分段条件：遇到逗号且达到较长长度
+                    elif len(text_buffer) >= 80 and text_buffer[-1] == '，':
+                        # 检查下一个标点前是否还有很多字
+                        next_punct = min((text_buffer.find(p, -20) for p in '。！？，' if p in text_buffer[-20:]), default=-1)
+                        if next_punct == -1:  # 如果接下来20字内没有标点
+                            should_synthesize = True
+                            print("触发合成：长句中断")
+                    
+                    # 安全阈值：防止缓冲区过大
                     elif len(text_buffer) >= 100:
+                        # 尝试在最后一个逗号处分段
+                        last_comma = text_buffer.rfind('，')
+                        if last_comma > 50:  # 如果找到合适的逗号位置
+                            text_buffer = text_buffer[:last_comma + 1]
                         should_synthesize = True
                         print("触发合成：达到最大长度")
-                    
-                    # 3. 遇到明显的语义分隔
-                    elif len(text_buffer) >= 20 and any(p in text_buffer[-1] for p in '。！？.!?'):
-                        should_synthesize = True
-                        print("触发合成：遇到自然语义分隔")
                     
                     if should_synthesize:
                         sentence_count += 1
@@ -124,7 +131,7 @@ class VoiceAIChatbot:
                             
                             audio_package = {
                                 'is_final': False,
-                                'audio_data': audio_base64,  # 使用base64编码的音频数据
+                                'audio_data': audio_base64,
                                 'text': text_buffer,
                                 'segment_id': sentence_count
                             }
