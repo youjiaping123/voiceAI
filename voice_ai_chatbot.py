@@ -155,6 +155,7 @@ class VoiceAIChatbot:
             return "抱歉，我现在无法回答。"
             
     def text_to_speech(self, text):
+        synthesizer = None
         try:
             print("正在生成语音回复...")
             
@@ -164,32 +165,32 @@ class VoiceAIChatbot:
                 region=os.getenv('SPEECH_REGION')
             )
             
-            # 使用 WAV 格式而不是 Raw PCM
+            # 配置语音参数
             speech_config.speech_synthesis_voice_name = "zh-CN-XiaoxiaoNeural"
             speech_config.set_speech_synthesis_output_format(
                 speechsdk.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm
             )
             
-            # 使用临时文件
-            temp_wav = 'temp_response.wav'
-            audio_config = speechsdk.audio.AudioOutputConfig(filename=temp_wav)
+            # 使用内存流接收音频数据
+            audio_stream = io.BytesIO()
+            
+            def audio_callback(evt):
+                if evt.result.reason == speechsdk.ResultReason.SynthesizingAudio:
+                    audio_stream.write(evt.result.audio_data)
             
             # 创建语音合成器
-            synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=speech_config, 
-                audio_config=audio_config
-            )
+            synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
+            synthesizer.synthesizing.connect(audio_callback)
             
             # 执行语音合成
             result = synthesizer.speak_text_async(text).get()
             
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                # 读取生成的WAV文件
-                with open(temp_wav, 'rb') as f:
-                    audio_data = f.read()
+                # 获取音频数据
+                audio_data = audio_stream.getvalue()
                 print(f"音频合成完成，数据大小: {len(audio_data)} 字节")
                 
-                # 发布音频数据
+                # 发布音频数据到MQTT
                 result = self.mqtt_client.publish("voice/response", audio_data)
                 if result.rc == mqtt.MQTT_ERR_SUCCESS:
                     print("语音回复已发送")
@@ -202,13 +203,11 @@ class VoiceAIChatbot:
             print(f"语音合成错误: {str(e)}")
             import traceback
             print(traceback.format_exc())
+        
         finally:
-            # 清理临时文件
-            try:
-                if os.path.exists(temp_wav):
-                    os.remove(temp_wav)
-            except Exception as e:
-                print(f"清理临时文件时出错: {str(e)}")
+            # 释放资源
+            if synthesizer:
+                synthesizer = None
     
     def start(self):
         # 连接到MQTT服务器
