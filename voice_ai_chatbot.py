@@ -44,20 +44,21 @@ class VoiceAIChatbot:
     def on_message(self, client, userdata, msg):
         if msg.topic == "voice/audio":
             try:
-                # 1. 语音识别保持完整处理
+                # 1. 语音识别
                 audio_data = msg.payload
                 text = self.speech_to_text(audio_data)
                 
                 if text:
                     print(f"识别到的文本: {text}")
-                    # 2. 使用流式处理AI回复和语音合成
-                    self.stream_ai_response_and_tts(text)
+                    # 2. 获取AI响应并转换为语音
+                    self.process_ai_response(text)
             except Exception as e:
                 print(f"处理音频数据时出错: {str(e)}")
 
-    def stream_ai_response_and_tts(self, text):
+    def process_ai_response(self, text):
         try:
-            print("\n=== 开始流式处理 ===")
+            print("\n=== 开始处理AI响应 ===")
+            # 配置语音合成
             speech_config = speechsdk.SpeechConfig(
                 subscription=os.getenv('SPEECH_KEY'), 
                 region=os.getenv('SPEECH_REGION')
@@ -65,118 +66,49 @@ class VoiceAIChatbot:
             speech_config.speech_synthesis_voice_name = "zh-CN-YunzeNeural"
             synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
 
+            # 获取AI响应
             print("正在获取AI响应...")
             response = self.ai_client.chat.completions.create(
                 model="claude-3-5-haiku-20241022",
                 messages=[
                     {"role": "system", "content": "..."},
                     {"role": "user", "content": text}
-                ],
-                stream=True
+                ]
             )
+            
+            ai_text = response.choices[0].message.content
+            print(f"AI响应文本: {ai_text}")
 
-            text_buffer = ""
-            sentence_count = 0
-            total_chars = 0
+            # 语音合成
+            result = synthesizer.speak_text_async(ai_text).get()
             
-            print("开始处理AI响应流...")
-            for chunk in response:
-                if chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    text_buffer += content
-                    total_chars += len(content)
-                    
-                    print(f"当前缓冲区({len(text_buffer)}字): {text_buffer}")
-                    
-                    # 智能分段逻辑
-                    should_synthesize = False
-                    
-                    # 主要分段条件：完整的句子且达到最小长度
-                    if len(text_buffer) >= 50 and any(p in text_buffer[-1] for p in '。！？'):
-                        should_synthesize = True
-                        print("触发合成：完整句子")
-                    
-                    # 次要分段条件：遇到逗号且达到较长长度
-                    elif len(text_buffer) >= 80 and text_buffer[-1] == '，':
-                        # 检查下一个标点前是否还有很多字
-                        next_punct = min((text_buffer.find(p, -20) for p in '。！？，' if p in text_buffer[-20:]), default=-1)
-                        if next_punct == -1:  # 如果接下来20字内没有标点
-                            should_synthesize = True
-                            print("触发合成：长句中断")
-                    
-                    # 安全阈值：防止缓冲区过大
-                    elif len(text_buffer) >= 100:
-                        # 尝试在最后一个逗号处分段
-                        last_comma = text_buffer.rfind('，')
-                        if last_comma > 50:  # 如果找到合适的逗号位置
-                            text_buffer = text_buffer[:last_comma + 1]
-                        should_synthesize = True
-                        print("触发合成：达到最大长度")
-                    
-                    if should_synthesize:
-                        sentence_count += 1
-                        print(f"\n--- 开始合成第{sentence_count}段文本 ---")
-                        print(f"文本内容: {text_buffer}")
-                        
-                        start_time = time.time()
-                        result = synthesizer.speak_text_async(text_buffer).get()
-                        synthesis_time = time.time() - start_time
-                        
-                        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                            audio_size = len(result.audio_data)
-                            print(f"合成成功: 耗时{synthesis_time:.2f}秒, 音频大小{audio_size}字节")
-                            
-                            # 将二进制音频数据转换为base64字符串
-                            audio_base64 = base64.b64encode(result.audio_data).decode('utf-8')
-                            
-                            audio_package = {
-                                'is_final': False,
-                                'audio_data': audio_base64,
-                                'text': text_buffer,
-                                'segment_id': sentence_count
-                            }
-                            
-                            publish_result = self.mqtt_client.publish(
-                                "voice/response/stream", 
-                                json.dumps(audio_package)
-                            )
-                            print(f"MQTT发送状态: {publish_result.rc}")
-                            
-                            text_buffer = ""
-                        else:
-                            print(f"合成失败: {result.reason}")
-            
-            # 处理剩余文本
-            if text_buffer:
-                sentence_count += 1
-                print(f"\n--- 合成最后一段文本 ---")
-                print(f"文本内容: {text_buffer}")
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                # 将二进制音频数据转换为base64字符串
+                audio_base64 = base64.b64encode(result.audio_data).decode('utf-8')
                 
-                result = synthesizer.speak_text_async(text_buffer).get()
-                if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                    audio_base64 = base64.b64encode(result.audio_data).decode('utf-8')
-                    audio_package = {
-                        'is_final': True,
-                        'audio_data': audio_base64,
-                        'text': text_buffer,
-                        'segment_id': sentence_count
-                    }
-                    self.mqtt_client.publish(
-                        "voice/response/stream", 
-                        json.dumps(audio_package)
-                    )
-            
-            print(f"\n=== 流式处理完成 ===")
-            print(f"总字符数: {total_chars}")
-            print(f"总段数: {sentence_count}")
+                audio_package = {
+                    'is_final': True,
+                    'audio_data': audio_base64,
+                    'text': ai_text,
+                    'segment_id': 1
+                }
+                
+                # 发送响应
+                self.mqtt_client.publish(
+                    "voice/response/stream", 
+                    json.dumps(audio_package)
+                )
+                print("响应已发送")
+            else:
+                print(f"语音合成失败: {result.reason}")
                 
         except Exception as e:
-            print(f"\n!!! 流式处理错误 !!!")
+            print(f"\n!!! 处理错误 !!!")
             print(f"错误类型: {type(e)}")
             print(f"错误信息: {str(e)}")
             import traceback
             print(traceback.format_exc())
-            
+
     def speech_to_text(self, audio_data):
         try:
             # 将接收到的音频数据保存为临时WAV文件
