@@ -6,8 +6,14 @@ from dotenv import load_dotenv
 import os
 import wave
 import time
+from datetime import datetime
 
 load_dotenv()
+
+def log(message):
+    """带时间戳的日志打印"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    print(f"[{timestamp}] {message}")
 
 class VoiceAIChatbot:
     def __init__(self):
@@ -34,12 +40,12 @@ class VoiceAIChatbot:
         self.is_recognizing = False
     
     def on_connect(self, client, userdata, flags, rc):
-        print("已连接到MQTT服务器")
+        log("已连接到MQTT服务器")
         client.subscribe("voice/stream")
     
     def start_stream_recognition(self):
         try:
-            print("正在启动语音识别...")
+            log("正在启动语音识别...")
             self.push_stream = speechsdk.audio.PushAudioInputStream()
             audio_config = speechsdk.audio.AudioConfig(stream=self.push_stream)
             
@@ -51,18 +57,18 @@ class VoiceAIChatbot:
             def handle_result(evt):
                 if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
                     if evt.result.text.strip():
-                        print(f"识别到语音: {evt.result.text}")
+                        log(f"识别到语音: {evt.result.text}")
                         ai_response = self.get_ai_response(evt.result.text)
-                        print(f"AI回复: {ai_response}")
+                        log(f"AI回复: {ai_response}")
                         self.text_to_speech(ai_response)
             
             self.speech_recognizer.recognized.connect(handle_result)
             self.speech_recognizer.start_continuous_recognition()
             self.is_recognizing = True
-            print("语音识别已启动")
+            log("语音识别已启动")
             
         except Exception as e:
-            print(f"启动语音识别出错: {str(e)}")
+            log(f"启动语音识别出错: {str(e)}")
             self.stop_stream_recognition()
     
     def stop_stream_recognition(self):
@@ -88,20 +94,20 @@ class VoiceAIChatbot:
                     self.push_stream.write(msg.payload)
                 
             except Exception as e:
-                print(f"处理音频出错: {str(e)}")
+                log(f"处理音频出错: {str(e)}")
                 self.stop_stream_recognition()
 
     def get_ai_response(self, message):
         max_retries = 3
-        timeout = 10  # 设置10秒超时
+        timeout = 10
         
         for attempt in range(max_retries):
             try:
-                print(f"正在请求AI回复... (尝试 {attempt + 1}/{max_retries})")
+                log(f"正在请求AI回复... (尝试 {attempt + 1}/{max_retries})")
                 response = self.ai_client.chat.completions.create(
-                    model="claude-3-5-haiku-20241022",
+                    model="gpt-3.5-turbo",
                     messages=[
-                        {"role": "system", "content": "你是一个简洁友好的AI助手，回答要简短精确。"},
+                        {"role": "system", "content": "你是一个友好的AI助手，回答要简短精确。"},
                         {"role": "user", "content": message}
                     ],
                     timeout=timeout
@@ -109,17 +115,17 @@ class VoiceAIChatbot:
                 return response.choices[0].message.content
                 
             except Exception as e:
-                print(f"AI调用出错 (尝试 {attempt + 1}): {str(e)}")
-                if attempt == max_retries - 1:  # 最后一次尝试
+                log(f"AI调用出错 (尝试 {attempt + 1}): {str(e)}")
+                if attempt == max_retries - 1:
                     return "抱歉,我现在无法回答。请稍后再试。"
                 else:
-                    print("正在重试...")
-                    time.sleep(1)  # 等待1秒后重试
+                    log("正在重试...")
+                    time.sleep(1)
 
     def text_to_speech(self, text):
         synthesizer = None
         try:
-            print("正在生成语音...")
+            log("正在生成语音...")
             speech_config = speechsdk.SpeechConfig(
                 subscription=os.getenv('SPEECH_KEY'), 
                 region=os.getenv('SPEECH_REGION')
@@ -155,17 +161,17 @@ class VoiceAIChatbot:
                 
                 # 获取完整的 WAV 数据
                 wav_data = wav_stream.getvalue()
-                print(f"音频合成完成，数据大小: {len(wav_data)} 字节")
+                log(f"音频合成完成，数据大小: {len(wav_data)} 字节")
                 
                 # 发送音频数据
                 result = self.mqtt_client.publish("voice/response", wav_data)
                 if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                    print("语音回复已发送")
+                    log("语音回复已发送")
                 else:
-                    print(f"发送失败，错误码: {result.rc}")
+                    log(f"发送失败，错误码: {result.rc}")
                 
         except Exception as e:
-            print(f"语��合成错误: {str(e)}")
+            log(f"语音合成错误: {str(e)}")
         finally:
             if synthesizer:
                 del synthesizer

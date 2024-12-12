@@ -1,72 +1,106 @@
 # 语音AI聊天机器人
 
-这是一个基于MQTT协议的语音AI聊天机器人系统，支持语音输入、AI对话以及语音合成输出功能。系统使用Azure语音服务进行语音识别和合成，通过Claude AI模型处理对话。
+这是一个基于Azure语音服务和OpenAI的语音聊天机器人项目，支持实时语音对话。用户可以通过语音输入进行交谈，系统会将语音转换为文字，通过AI处理后返回语音回复。
 
-## 系统架构
+## 功能特点
 
-该系统主要包含两个核心组件：
+- 实时语音识别和转写
+- AI自然语言处理（基于GPT-3.5）
+- 文字转语音回复
+- 基于MQTT的实时音频流传输
+- 支持中文语音交互
+- 简单的用户界面，使用空格键控制录音
 
-1. **语音AI聊天机器人服务端** (voice_ai_chatbot.py)
-   - 订阅MQTT音频数据主题
-   - 使用Azure Speech Services进行语音识别(STT)
-   - 调用Claude AI进行对话处理
-   - 使用Azure Speech Services进行语音合成(TTS)
-   - 将合成的语音通过MQTT发送回客户端
+## 系统要求
 
-2. **用户客户端** (user.py)
-   - 提供语音录制功能
-   - 通过MQTT发送音频数据
-   - 接收并播放AI回复的语音
+- Python 3.7+
+- Windows操作系统（当前版本使用了msvcrt库）
+- 麦克风和扬声器
+- 网络连接
 
-## 技术栈
+## 依赖项
 
-- **MQTT**: 用于实现客户端与服务端之间的通信
-- **Azure Speech Services**: 提供语音识别(STT)和语音合成(TTS)服务
-- **Claude AI**: 提供智能对话服务
-- **PyAudio**: 用于音频录制和播放
-- **Python**: 主要开发语言
+```plaintext
+azure-cognitiveservices-speech
+openai
+paho-mqtt
+python-dotenv
+pyaudio
+wave
+```
 
-## 环境要求
+## 环境配置
 
-需要在环境变量文件(.env)中配置以下参数：
-- SPEECH_KEY: Azure语音服务密钥
-- SPEECH_REGION: Azure服务区域
-- API_KEY: Claude AI API密钥
-- BASE_URL: Claude AI API基础URL
-- MQTT_BROKER: MQTT服务器地址
-- MQTT_PORT: MQTT服务器端口
+1. 克隆项目并安装依赖：
+```bash
+git clone https://github.com/youjiaping123/voiceAI
+cd voiceAI
+pip install -r requirements.txt
+```
 
-## 使用方法
+2. 创建`.env`文件并配置以下环境变量：
+```plaintext
+SPEECH_KEY=你的Azure语音服务密钥          
+SPEECH_REGION=Azure服务区域
+API_KEY=OpenAI API密钥
+BASE_URL=OpenAI API地址
+MQTT_BROKER=MQTT服务器地址
+MQTT_PORT=MQTT服务器端口
+```
 
-1. 启动服务端：
+## 使用说明
+
+1. 首先启动语音AI服务端：
 ```bash
 python voice_ai_chatbot.py
 ```
 
-2. 启动客户端：
+2. 然后启动用户客户端：
 ```bash
 python user.py
 ```
 
-3. 操作说明：
+3. 操作方法：
    - 按空格键开始录音
-   - 再次按空格键结束录音
-   - 系统会自动处理语音并通过AI生成回复
-   - AI的语音回复会自动播放
+   - 再次按空格键停止录音
+   - 系统会自动处理语音并返回AI的语音回复
+   - 使用Ctrl+C退出程序
 
-## 通信流程
+## 系统架构
 
-1. 用户通过客户端录制语音
-2. 语音数据通过MQTT发送至服务端(topic: voice/audio)
-3. 服务端进行语音识别
-4. 识别结果发送给Claude AI处理
-5. AI回复转换为语音
-6. 语音数据通过MQTT发送回客户端(topic: voice/response)
-7. 客户端接收并播放语音回复
+### 核心组件
+
+1. **语音服务端 (voice_ai_chatbot.py)**
+   - 处理语音识别
+   - 与OpenAI API交互
+   - 生成语音回复
+   - 管理MQTT消息通信
+
+2. **用户客户端 (user.py)**
+   - 录制用户语音
+   - 通过MQTT发送音频流
+   - 接收并播放AI回复
+   - 提供用户交互界面
+
+### 数据流
+
+1. 用户语音输入 → MQTT音频流传输
+2. 语音识别 → 文字转换
+3. AI处理 → 生成回复
+4. 文字转语音 → MQTT传输
+5. 客户端接收 → 播放语音回复
 
 ## 注意事项
 
-- 确保MQTT服务器正常运行
-- 录音时间不能太短（小于0.3秒的录音会被忽略）
-- 需要稳定的网络连接以确保服务正常运行
-```
+- 确保麦克风和扬声器正常工作
+- 需要稳定的网络连接
+- Azure和OpenAI服务需要有效的API密钥
+- MQTT服务器需要正确配置和运行
+
+## 错误处理
+
+系统包含完整的错误处理和日志记录机制：
+- 所有操作都有时间戳日志
+- 网络连接异常处理
+- 音频设备错误处理
+- API调用重试机制
