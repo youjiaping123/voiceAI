@@ -5,6 +5,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import wave
+import time
 
 load_dotenv()
 
@@ -91,19 +92,29 @@ class VoiceAIChatbot:
                 self.stop_stream_recognition()
 
     def get_ai_response(self, message):
-        try:
-            print("正在请求AI回复...")
-            response = self.ai_client.chat.completions.create(
-                model="claude-3-5-haiku-20241022",
-                messages=[
-                    {"role": "system", "content": "你是一个简洁友好的AI助手，回答要简短精确。"},
-                    {"role": "user", "content": message}
-                ]
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            print(f"AI调用出错: {str(e)}")
-            return "抱歉,我现在无法回答。"
+        max_retries = 3
+        timeout = 10  # 设置10秒超时
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"正在请求AI回复... (尝试 {attempt + 1}/{max_retries})")
+                response = self.ai_client.chat.completions.create(
+                    model="claude-3-5-haiku-20241022",
+                    messages=[
+                        {"role": "system", "content": "你是一个简洁友好的AI助手，回答要简短精确。"},
+                        {"role": "user", "content": message}
+                    ],
+                    timeout=timeout
+                )
+                return response.choices[0].message.content
+                
+            except Exception as e:
+                print(f"AI调用出错 (尝试 {attempt + 1}): {str(e)}")
+                if attempt == max_retries - 1:  # 最后一次尝试
+                    return "抱歉,我现在无法回答。请稍后再试。"
+                else:
+                    print("正在重试...")
+                    time.sleep(1)  # 等待1秒后重试
 
     def text_to_speech(self, text):
         synthesizer = None
@@ -113,42 +124,36 @@ class VoiceAIChatbot:
                 subscription=os.getenv('SPEECH_KEY'), 
                 region=os.getenv('SPEECH_REGION')
             )
+            
             # 设置语音合成参数
             speech_config.speech_synthesis_voice_name = "zh-CN-XiaoxiaoNeural"
+            # 使用标准的 WAV 格式
             speech_config.set_speech_synthesis_output_format(
                 speechsdk.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm
             )
             
-            # 创建内存流存储音频数据
-            audio_stream = io.BytesIO()
-            
-            def audio_callback(evt):
-                if evt.result.reason == speechsdk.ResultReason.SynthesizingAudio:
-                    audio_stream.write(evt.result.audio_data)
-            
-            # 创建语音合成器，使用内存流而不是默认音频输出
+            # 创建音频配置 - 移除不必要的音频输出配置
             synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=speech_config, 
+                speech_config=speech_config,
                 audio_config=None  # 不使用音频输出设备
             )
-            synthesizer.synthesizing.connect(audio_callback)
             
             # 执行语音合成
             result = synthesizer.speak_text_async(text).get()
             
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                # 获取完整的音频数据
-                audio_data = audio_stream.getvalue()
+                # 获取音频数据
+                audio_data = result.audio_data
                 
-                # 创建WAV文件头
+                # 创建 WAV 文件格式
                 wav_stream = io.BytesIO()
                 with wave.open(wav_stream, 'wb') as wav_file:
                     wav_file.setnchannels(1)  # 单声道
-                    wav_file.setsampwidth(2)  # 16位
-                    wav_file.setframerate(16000)  # 16kHz
+                    wav_file.setsampwidth(2)  # 16位采样
+                    wav_file.setframerate(16000)  # 16kHz 采样率
                     wav_file.writeframes(audio_data)
                 
-                # 发送完整的WAV文件数据
+                # 获取完整的 WAV 数据
                 wav_data = wav_stream.getvalue()
                 print(f"音频合成完成，数据大小: {len(wav_data)} 字节")
                 
@@ -160,7 +165,7 @@ class VoiceAIChatbot:
                     print(f"发送失败，错误码: {result.rc}")
                 
         except Exception as e:
-            print(f"语音合成错误: {str(e)}")
+            print(f"语��合成错误: {str(e)}")
         finally:
             if synthesizer:
                 del synthesizer

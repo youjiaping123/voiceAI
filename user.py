@@ -67,6 +67,10 @@ def on_message(client, userdata, msg):
             temp_file.close()
             
             wf = wave.open(temp_file.name, 'rb')
+            
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 16000:
+                print(f"警告: 音频格式不符合预期 (通道数:{wf.getnchannels()}, 采样宽度:{wf.getsampwidth()}, 采样率:{wf.getframerate()})")
+            
             p = pyaudio.PyAudio()
             stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
                           channels=wf.getnchannels(),
